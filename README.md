@@ -13,7 +13,7 @@ Main result per movie: `outputs/analysis/transition_hoct/report.html`.
 
 ```
 celltrack/          the pipeline (one CLI module per stage, see §2)
-demo/               stand-alone napari demo for collaborators (see §6)
+demo/               browser viewer (demo/web, live at wadduwagelab.com/demos/celltrack) and napari demo (see §6)
 docs/images/        screenshots used in this README
 configs/            default.yaml (laptop, Apple MPS) and wahab.yaml (ODU Wahab cluster, CUDA)
 cluster/wahab/      Slurm job script, environment setup and data download for the Wahab cluster
@@ -117,9 +117,24 @@ together) and change the seed to draw another subset:
 python -m celltrack.view napari --name hoct --fraction 0.1 --seed 2
 ```
 
-### Demo for collaborators (no data, no GPU)
+### Live browser demo (nothing to install)
 
-`demo/celltrack_demo.py` opens the same viewer on a 768 × 768 px, 96-frame excerpt of well A1
+**https://wadduwagelab.com/demos/celltrack/** — two 96-frame, 768 × 768 px excerpts of well A1
+(0–4 h sparse, 20–24 h dense) in a static HTML/JS viewer: zoom/pan, time scrubbing, trails coloured
+by track id or state, masks coloured by track id, division/death rings, hover for track id / state /
+speed / link confidence, click to highlight a lineage, plus the transition matrix and dwell times.
+
+<p align="center"><img src="docs/images/web_viewer.png" width="90%"></p>
+
+The viewer is `demo/web/` (no build step); its data comes from
+`python -m celltrack.view export-web --name hoct --crop Y X SIZE --start A --stop B [--label "..."]`,
+which writes JPEG frames, RGBA mask overlays and `tracks.json` into `demo/web/data/<tag>/` (~14 MB per
+excerpt) and registers the excerpt in `data/index.json`. To publish, copy `demo/web/` to any static
+host; the live copy lives in the lab-website repository under `demos/celltrack/`.
+
+### napari demo for collaborators (no data, no GPU)
+
+`demo/celltrack_demo.py` opens the full napari viewer on a 768 × 768 px, 96-frame excerpt of well A1
 (~45 MB, downloaded once from the [demo release](https://github.com/dushanw/celltrack-dynamics/releases/tag/demo-v1)),
 together with the population transition matrix:
 
