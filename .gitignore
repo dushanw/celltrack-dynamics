@@ -1,0 +1,27 @@
+# data and results are never committed (hundreds of GB); see README "Data"
+data/
+outputs/
+logs/
+*.tif
+*.tiff
+*.zarr/
+*.parquet
+*.geff/
+*.mp4
+*.npy
+
+# environments and caches
+.venv/
+env/
+__pycache__/
+*.py[cod]
+.cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/
