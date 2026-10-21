@@ -13,8 +13,7 @@ Run:
     python celltrack_demo.py path/to/bundle.zip
 
 The ~45 MB demo bundle is downloaded once from the GitHub release page and cached in
-~/.cache/celltrack_demo (while the repository is private this needs the GitHub CLI: install
-`gh`, run `gh auth login` once, and you must have access to the repository). It contains the flattened phase-contrast crop, the Cellpose-SAM masks,
+~/.cache/celltrack_demo. It contains the flattened phase-contrast crop, the Cellpose-SAM masks,
 the per-cell state table (track id, lineage, state, speed, events, link confidence) and the
 population transition matrices.
 
@@ -62,8 +61,8 @@ STATE_COLORS = {
 
 
 def download(url: str, dest: Path):
-    """Plain HTTPS download; if the repository is private (404/401), fall back to the GitHub CLI
-    (`gh auth login` once), which can read release assets of repositories you have access to."""
+    """Plain HTTPS download. If the asset is not publicly readable (e.g. the repository was made
+    private again), fall back to the GitHub CLI, which can read release assets you have access to."""
     import shutil
     import subprocess
     import urllib.error
@@ -82,7 +81,7 @@ def download(url: str, dest: Path):
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403, 404):
             raise
-        print(f"\n  direct download failed ({e.code}: repository is private); trying the GitHub CLI")
+        print(f"\n  direct download failed ({e.code}); trying the GitHub CLI")
     if shutil.which("gh") is None:
         sys.exit("The release asset is not publicly readable. Either install the GitHub CLI and run `gh auth login`\n"
                  "(you need access to " + REPO + "), or ask for the bundle zip and pass its path.")

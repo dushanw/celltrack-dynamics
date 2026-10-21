@@ -147,9 +147,7 @@ python demo/celltrack_demo.py late --fraction 0.3
 
 <p align="center"><img src="docs/images/demo_window.png" width="90%"></p>
 
-While the repository is private the download needs the GitHub CLI (`gh auth login`, and access
-to the repository); alternatively send the bundle zip directly and run
-`python demo/celltrack_demo.py path/to/celltrack_demo_A1_late.zip`. New bundles for any movie,
+A bundle zip can also be passed directly: `python demo/celltrack_demo.py path/to/celltrack_demo_A1_late.zip`. New bundles for any movie,
 window or crop are produced with `python -m celltrack.view export-demo --name hoct --crop Y X SIZE --start A --stop B`.
 
 ## 7. Outputs
