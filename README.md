@@ -13,9 +13,11 @@ Main result per movie: `outputs/analysis/transition_hoct/report.html`.
 
 ```
 celltrack/          the pipeline (one CLI module per stage, see §2)
+demo/               stand-alone napari demo for collaborators (see §6)
+docs/images/        screenshots used in this README
 configs/            default.yaml (laptop, Apple MPS) and wahab.yaml (ODU Wahab cluster, CUDA)
 cluster/wahab/      Slurm job script, environment setup and data download for the Wahab cluster
-data/               raw stacks      (git-ignored; see §7)
+data/               raw stacks      (git-ignored; see §8)
 outputs/            all results     (git-ignored)
 ```
 
@@ -69,7 +71,73 @@ Interpretation: early and in sparse regions the tracking is close to perfect; in
 * MSD exponent α ≈ 1.0, persistence < 1 frame: at this sampling the cells behave like random walkers. Cells in clusters move slower (D 372 vs 556 px²/frame) and sub-diffusively (α 0.89).
 * Median dwell: stationary 2.5 min, slow 2.5 min, fast 5 min.
 
-## 6. Outputs
+<p align="center">
+<img src="docs/images/heatmap_lag1_all.png" width="49%"> <img src="docs/images/heatmap_lag12_all.png" width="49%">
+</p>
+<p align="center"><i>Transition matrices at lag 1 (2.5 min, left) and lag 12 (30 min, right). Rows: state at t; columns: state reached, or terminal event. By 30 min every row has converged to the same distribution: motion state has little memory.</i></p>
+
+## 6. Use case: judging the tracking by eye
+
+Numbers from §4 tell you *how much* to trust the links; the viewer shows you *where*. A typical
+session on well A1:
+
+```bash
+python -m celltrack.view napari --name hoct                      # whole 24 h movie, lazy-loaded
+```
+
+<p align="center"><img src="docs/images/viewer_overview.png" width="80%"></p>
+<p align="center"><i>Full 3072 × 3072 px field at 12 h with 10-frame trails, one colour per track id. Dense regions (bottom-left, right) are where links become uncertain.</i></p>
+
+Zoom into a dense region late in the movie and switch the trail colouring between **track id**
+and **state**:
+
+```bash
+python -m celltrack.view napari --name hoct --start 480 --stop 576 --crop 1200 1200 768
+```
+
+<p align="center"><img src="docs/images/viewer_id_vs_state.png" width="100%"></p>
+<p align="center"><i>Left: colour = track id. A trail that changes colour is an identity switch; a trail that stops is a cell that was lost, merged, left or divided. Right: the same frame with colour = motion state (blue stationary, yellow slow, red fast).</i></p>
+
+Turn on the `masks` layer to check the segmentation under the trails; hover a cell with a tracks
+layer selected to read its track id, state and speed in the status bar.
+
+<p align="center"><img src="docs/images/viewer_masks.png" width="70%"></p>
+
+Confirmed divisions are drawn as green circles. Scrubbing a few frames around one shows the
+sequence the refinement step requires: an elongated mother rounds up and brightens, then two
+sub-mother-sized daughters appear next to each other and move apart.
+
+<p align="center"><img src="docs/images/viewer_division.png" width="100%"></p>
+<p align="center"><i>Track 854 dividing at 6.8 h (frames 162–165, 3-frame trails). Daughters start new tracks whose <code>parent_track_id</code> is 854.</i></p>
+
+When the full field is too cluttered, show a random subset of lineages (mothers and daughters stay
+together) and change the seed to draw another subset:
+
+```bash
+python -m celltrack.view napari --name hoct --fraction 0.1 --seed 2
+```
+
+### Demo for collaborators (no data, no GPU)
+
+`demo/celltrack_demo.py` opens the same viewer on a 768 × 768 px, 96-frame excerpt of well A1
+(~45 MB, downloaded once from the [demo release](https://github.com/dushanw/celltrack-dynamics/releases/tag/demo-v1)),
+together with the population transition matrix:
+
+```bash
+pip install "napari[pyqt6]" numpy pandas pyarrow
+python demo/celltrack_demo.py            # frames 0-95   (0-4 h, sparse)
+python demo/celltrack_demo.py late       # frames 480-575 (20-24 h, dense)
+python demo/celltrack_demo.py late --fraction 0.3
+```
+
+<p align="center"><img src="docs/images/demo_window.png" width="90%"></p>
+
+While the repository is private the download needs the GitHub CLI (`gh auth login`, and access
+to the repository); alternatively send the bundle zip directly and run
+`python demo/celltrack_demo.py path/to/celltrack_demo_A1_late.zip`. New bundles for any movie,
+window or crop are produced with `python -m celltrack.view export-demo --name hoct --crop Y X SIZE --start A --stop B`.
+
+## 7. Outputs
 
 ```
 outputs/
@@ -84,7 +152,7 @@ outputs/
   qc/movies/                          overlay movies (3 crops + full field)
 ```
 
-## 7. Installation, data and running
+## 8. Installation, data and running
 
 ```bash
 git clone https://github.com/dushanw/celltrack-dynamics && cd celltrack-dynamics
@@ -118,7 +186,7 @@ container via `crun`, CUDA 12.6 torch for the V100s, model weights); `sbatch clu
 runs the whole pipeline for one movie on a 4-GPU node (segmentation split over the GPUs, forward /
 reversed HOCT and the comparison linkers concurrently). Total ≈ 3.5 h per movie.
 
-## 8. Limitations
+## 9. Limitations
 
 * Pixel size unknown: all lengths are in pixels. Set `acquisition.pixel_size_um` in the config and re-run `states`, `transition`, `motility` for µm units.
 * Division recall inside clusters is limited, and the 500 "in-cluster" divisions are roughly half false; the true count lies between 384 and 884. Death is under-detected (corpses that stay visible are counted as stationary).
