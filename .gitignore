@@ -26,3 +26,4 @@ dist/
 .idea/
 .vscode/
 demo/web/data/
+configs/wells/

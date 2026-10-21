@@ -201,14 +201,16 @@ def run_laptrack(det, cfg):
 
 
 # --------------------------------------------------------------------------- hoct
-def run_hoct(imgs, segs, det, start, cfg, workdir: Path, device: str, crop=None, frames=None):
+def run_hoct(imgs, segs, det, start, cfg, workdir: Path, device: str, crop=None, frames=None, gpu=None):
     """HOCT works from files; write the (sub)stack as TIFFs and call the CLI.
     Its GEFF carries crop-local positions (no mask labels), so nodes are matched
     back to detections by position.
 
     `frames` (optional) gives the original frame index of each plane of `imgs`; this
     lets callers pass subsampled or time-reversed stacks (validation) and still get
-    edges in canonical node ids. Default: start, start+1, ..."""
+    edges in canonical node ids. Default: start, start+1, ...
+    `gpu` (optional) pins the subprocess to one CUDA device (CUDA_VISIBLE_DEVICES)."""
+    import os
     import tifffile
 
     from .graphio import graph_from_geff
@@ -228,9 +230,10 @@ def run_hoct(imgs, segs, det, start, cfg, workdir: Path, device: str, crop=None,
     tifffile.imwrite(img_p, imgs, bigtiff=True, photometric="minisblack", metadata={"axes": "TYX"})
     tifffile.imwrite(seg_p, segs, bigtiff=True, photometric="minisblack", metadata={"axes": "TYX"})
     cmd = ["hoct", "track", str(img_p), str(seg_p), "-o", str(out_p), "-ow", "-d", device]
-    log.info("Running: %s", " ".join(cmd))
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu)) if gpu is not None else None
+    log.info("Running: %s%s", " ".join(cmd), f"  (GPU {gpu})" if gpu is not None else "")
     t0 = time.time()
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
     (workdir / "hoct.log").write_text(res.stdout + "\n" + res.stderr)
     if res.returncode != 0:
         raise RuntimeError(f"hoct failed (see {workdir/'hoct.log'}):\n{res.stderr[-2000:]}")
@@ -263,39 +266,57 @@ def run_hoct(imgs, segs, det, start, cfg, workdir: Path, device: str, crop=None,
 
 # --------------------------------------------------------------------------- generic chunking
 def stitch_chunks(solve, det: pd.DataFrame, start: int, stop: int, chunk: int, overlap: int,
-                  cache_dir: Path | None = None, tag: str = "", keep_by_target: bool = False) -> nx.DiGraph:
-    """Run `solve(a, b) -> nx.DiGraph (canonical ids)` on overlapping windows [a, b) and
-    stitch by *source frame*: window k contributes the outgoing edges of frames in its
-    keep-range; keep-ranges partition [start, stop). Per-window edge lists are cached as
-    parquet so interrupted or incremental runs resume."""
+                  cache_dir: Path | None = None, tag: str = "", keep_by_target: bool = False,
+                  jobs: int = 1) -> nx.DiGraph:
+    """Run `solve(a, b, k) -> nx.DiGraph (canonical ids)` on overlapping windows [a, b) (k = window
+    index) and stitch by *source frame*: window k contributes the outgoing edges of frames in its
+    keep-range; keep-ranges partition [start, stop). Per-window edge lists are cached as parquet
+    so interrupted or incremental runs resume. `jobs` > 1 solves windows concurrently (worker
+    threads; useful when `solve` drives an external process such as the HOCT CLI)."""
+    from concurrent.futures import ThreadPoolExecutor
+
     H = graph_from_detections(det)
     frame_of = {n: d["time"] for n, d in H.nodes(data=True)}
+    windows = []  # (a, b, keep_from, keep_to)
     a, keep_from = start, start
     while a < stop:
         b = min(a + chunk + overlap, stop)
         keep_to = stop if b >= stop else b - overlap // 2
+        windows.append((a, b, keep_from, keep_to))
+        keep_from = keep_to
+        a = keep_to
+        if b >= stop:
+            break
+
+    def solve_cached(k):
+        a, b = windows[k][:2]
         cache = cache_dir / f"{tag}_chunk_{a}_{b}.parquet" if cache_dir else None
         if cache is not None and cache.exists():
             edges = pd.read_parquet(cache)
             log.info("chunk %d..%d loaded from cache (%d edges)", a, b - 1, len(edges))
-        else:
-            t0 = time.time()
-            G = solve(a, b)
-            edges = pd.DataFrame([(u, v, float(d.get("weight", 1.0))) for u, v, d in G.edges(data=True)],
-                                 columns=["u", "v", "weight"])
-            if cache is not None:
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                edges.to_parquet(cache, index=False)
-            log.info("chunk %d..%d solved in %.1f min (%d edges)", a, b - 1, (time.time() - t0) / 60, len(edges))
+            return edges
+        t0 = time.time()
+        G = solve(a, b, k)
+        edges = pd.DataFrame([(u, v, float(d.get("weight", 1.0))) for u, v, d in G.edges(data=True)],
+                             columns=["u", "v", "weight"])
+        if cache is not None:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            edges.to_parquet(cache, index=False)
+        log.info("chunk %d..%d solved in %.1f min (%d edges)", a, b - 1, (time.time() - t0) / 60, len(edges))
+        return edges
+
+    if jobs > 1:
+        with ThreadPoolExecutor(jobs) as ex:
+            results = list(ex.map(solve_cached, range(len(windows))))
+    else:
+        results = [solve_cached(k) for k in range(len(windows))]
+
+    for (a, b, keep_from, keep_to), edges in zip(windows, results):
         for u, v, w in edges.itertuples(index=False):
             key = v if keep_by_target else u
             if u in H and v in H and keep_from <= frame_of[key] < keep_to:
                 if H.in_degree(v) == 0 and H.out_degree(u) < 2:
                     H.add_edge(int(u), int(v), weight=float(w))
-        keep_from = keep_to
-        a = keep_to
-        if b >= stop:
-            break
     return H
 
 
@@ -323,6 +344,8 @@ def main(argv=None):
     ap.add_argument("--reverse", action="store_true", help="trackastra: link the time-reversed movie")
     ap.add_argument("--device", default=None)
     ap.add_argument("--model", default=None, help="trackastra pretrained model name (general_2d | ctc)")
+    ap.add_argument("--jobs", type=int, default=1, help="hoct: solve this many chunks concurrently")
+    ap.add_argument("--gpus", default=None, help="hoct: comma-separated CUDA device ids to spread concurrent chunks over, e.g. 0,1")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     if args.device:
@@ -344,7 +367,7 @@ def main(argv=None):
     if args.linker == "trackastra":
         if args.chunk and not args.reverse:
             # prediction + linking per temporal chunk (bounded memory, resumable)
-            def solve(a, b):
+            def solve(a, b, k=0):
                 G, _ = run_trackastra(imgs[a - start:b - start], segs[a - start:b - start],
                                       det[(det.frame >= a) & (det.frame < b)], np.arange(a, b), cfg,
                                       mode=mode, chunk=b - a)
@@ -361,21 +384,24 @@ def main(argv=None):
         # HOCT's JIT model contains float64 tensors, which MPS cannot load -> CPU unless CUDA
         dev = args.device or ("cuda" if pick_device("cuda") == "cuda" else "cpu")
         rev = args.reverse  # time-reversed linking (for the reverse-consistency confidence of every edge)
+        gpus = [g.strip() for g in args.gpus.split(",")] if args.gpus else [None]
 
-        def solve(a, b):
+        def solve(a, b, k=0):
             sl = slice(a - start, b - start)
             fr = np.arange(a, b)
+            work = out_dir / f"{name}_work" / (f"{a}_{b}" if args.jobs > 1 else "")
+            gpu = gpus[k % len(gpus)]
             if rev:
                 return run_hoct(np.asarray(imgs[sl])[::-1], np.asarray(segs[sl])[::-1],
                                 det[(det.frame >= a) & (det.frame < b)], a, cfg,
-                                out_dir / f"{name}_work", dev, crop=args.crop, frames=fr[::-1])
+                                work, dev, crop=args.crop, frames=fr[::-1], gpu=gpu)
             return run_hoct(imgs[sl], segs[sl], det[(det.frame >= a) & (det.frame < b)], a, cfg,
-                            out_dir / f"{name}_work", dev, crop=args.crop)
+                            work, dev, crop=args.crop, gpu=gpu)
 
         if args.chunk:
             H = stitch_chunks(solve, det, start, stop, args.chunk, 4, cache_dir,
                               tag=("hoct_rev" if rev else "hoct") + (f"_c{args.crop[0]}-{args.crop[1]}-{args.crop[2]}" if args.crop else ""),
-                              keep_by_target=rev)
+                              keep_by_target=rev, jobs=args.jobs)
         else:
             H = solve(start, stop)
     tracks, lineages = save_tracks(H, out_dir, name)
