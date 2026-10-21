@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>celltrack-dynamics - tracking viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <strong>celltrack-dynamics</strong>
+  <select id="dataset" title="dataset"></select>
+  <span id="title" class="muted"></span>
+  <a class="muted right" href="https://github.com/dushanw/celltrack-dynamics" target="_blank" rel="noopener">code</a>
+</header>
+
+<main>
+  <aside id="left">
+    <section>
+      <h3>Layers</h3>
+      <label><input type="checkbox" id="l-image" checked> phase contrast</label>
+      <label><input type="checkbox" id="l-masks"> masks (colour = track id)
+        <input type="range" id="mask-opacity" min="0" max="1" step="0.05" value="0.45"></label>
+      <label><input type="checkbox" id="l-trails" checked> trails</label>
+      <div class="indent">
+        colour by
+        <label class="inline"><input type="radio" name="trail-color" value="id" checked> track id</label>
+        <label class="inline"><input type="radio" name="trail-color" value="state"> state</label><br>
+        tail <input type="range" id="tail" min="1" max="30" value="10"> <span id="tail-v">10</span> frames
+      </div>
+      <label><input type="checkbox" id="l-markers" checked> cell markers (colour = state)</label>
+      <label><input type="checkbox" id="l-events" checked> events (division / death)</label>
+      <label><input type="checkbox" id="l-ids"> track ids</label>
+      <label><input type="checkbox" id="l-lowconf"> dim links with confidence &lt; <span id="conf-v">0.5</span>
+        <input type="range" id="conf" min="0" max="1" step="0.05" value="0.5"></label>
+    </section>
+    <section>
+      <h3>Legend</h3>
+      <div id="legend"></div>
+    </section>
+    <section>
+      <h3>How to read it</h3>
+      <ul class="help">
+        <li>Scroll to zoom, drag to pan, <kbd>R</kbd> resets the view.</li>
+        <li><kbd>space</kbd> plays, <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> step one frame (2.5 min).</li>
+        <li>A trail that changes colour is an identity switch; a trail that stops is a cell that was lost, merged, left the field or divided.</li>
+        <li>Green ring = confirmed division (two daughter tracks start); magenta ring = death.</li>
+        <li>Hover a cell for its track id, state, speed and link confidence; click to highlight its whole lineage.</li>
+      </ul>
+    </section>
+  </aside>
+
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="tooltip" hidden></div>
+    <div id="loading">loading&hellip;</div>
+    <div id="controls">
+      <button id="play" title="play / pause (space)">&#9654;</button>
+      <input type="range" id="time" min="0" max="0" value="0">
+      <span id="time-label"></span>
+      <select id="fps" title="playback speed">
+        <option value="2">2 fps</option><option value="4">4 fps</option><option value="8" selected>8 fps</option><option value="15">15 fps</option>
+      </select>
+      <button id="reset" title="reset view (R)">&#8635;</button>
+    </div>
+  </div>
+
+  <aside id="right">
+    <section>
+      <h3>This excerpt</h3>
+      <div id="stats" class="kv"></div>
+    </section>
+    <section>
+      <h3>Transition matrix <span class="muted">(whole movie)</span></h3>
+      <div>lag
+        <select id="lag"><option value="lag1">1 frame (2.5 min)</option><option value="lag4">4 frames (10 min)</option><option value="lag12">12 frames (30 min)</option></select>
+      </div>
+      <div id="matrix"></div>
+      <p class="muted small">P(state or event at t+lag | state at t). Rows are the state at <i>t</i>;
+        columns the motion state reached, or the terminal event (left the field, died, merged with a neighbour, lost by the tracker).
+        n = number of cell-frames in the row.</p>
+    </section>
+    <section>
+      <h3>Dwell times <span class="muted">(median, min)</span></h3>
+      <div id="dwell" class="kv"></div>
+    </section>
+    <section id="selection" hidden>
+      <h3>Selected lineage</h3>
+      <div id="sel" class="kv"></div>
+      <button id="clear-sel">clear</button>
+    </section>
+  </aside>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

@@ -8,6 +8,9 @@
 
     python -m celltrack.view export-demo --name hoct --crop 1200 1200 768 --start 0 --stop 96
         writes a small self-contained zip (image, masks, states, matrices) for demo/celltrack_demo.py
+
+    python -m celltrack.view export-web --name hoct --crop 1200 1200 768 --start 480 --stop 576
+        writes JPEG frames + mask overlays + tracks.json into demo/web/data/<tag>/ for the browser viewer
 """
 
 from __future__ import annotations
@@ -227,9 +230,104 @@ def cmd_movie(args, cfg):
     log.info("Wrote %s", path)
 
 
+def _track_color(tid: int):
+    """Stable, well-separated colour per track id (golden-ratio hue), as (r, g, b) in 0..255."""
+    import colorsys
+
+    h = (tid * 0.618033988749895) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(h, 0.65, 1.0)
+    return int(r * 255), int(g * 255), int(b * 255)
+
+
+def cmd_export_web(args, cfg):
+    """Write a dataset for the browser viewer in demo/web: JPEG frames, RGBA mask overlays coloured
+    by track id, tracks.json (per track: lineage, parent, [frame, x, y, state, speed, confidence]),
+    the transition matrices as JSON and meta.json. ~10-15 MB per 96-frame 768 px crop."""
+    import json
+    import shutil
+
+    import imageio.v3 as iio
+
+    crop = args.crop or (1200, 1200, 768)
+    args.crop = crop
+    img, lab, start, stop = _load_window(cfg, args)
+    img, lab = np.asarray(img), np.asarray(lab)
+    d = load_states(cfg, args.name, start, stop, crop, args.fraction, args.seed)
+    tag = args.tag or f"{Path(cfg['paths']['raw_tif']).stem.replace('_stack', '')}_f{start}-{stop}"
+    from .common import ROOT
+
+    out = Path(args.out or (ROOT / "demo" / "web" / "data")) / tag
+    for sub in ("frames", "masks"):
+        (out / sub).mkdir(parents=True, exist_ok=True)
+
+    # frames + mask overlays (colour = track id so identities can be followed on the masks too)
+    tid_of = {(int(f), int(l)): int(t) for f, l, t in d[["frame", "label", "track_id"]].itertuples(index=False)}
+    for i in range(stop - start):
+        iio.imwrite(out / "frames" / f"{i:03d}.jpg", img[i], quality=85)
+        m = lab[i]
+        labels = np.unique(m)
+        labels = labels[labels > 0]
+        lut = np.zeros((int(m.max()) + 1, 4), dtype=np.uint8)
+        for l in labels:
+            tid = tid_of.get((start + i, int(l)))
+            lut[l] = (*_track_color(tid), 255) if tid is not None else (140, 140, 140, 255)
+        iio.imwrite(out / "masks" / f"{i:03d}.png", lut[m], compress_level=6)
+
+    # tracks
+    codes = {s: k for k, s in enumerate(STATE_COLORS)}
+    tid_track = d.set_index("node_id")["track_id"].to_dict()
+    tracks = []
+    for tid, g in d.sort_values("frame").groupby("track_id"):
+        p = g.iloc[0]["parent_node"]
+        parent = int(tid_track[p]) if p != -1 and p in tid_track and tid_track[p] != tid else None
+        pts = [[int(r.frame_local), round(float(r.x), 1), round(float(r.y), 1), int(codes.get(r.state, 1)),
+                round(float(r.speed_px_per_frame), 1) if pd.notna(r.speed_px_per_frame) else None,
+                round(float(r.edge_conf_in), 2) if "edge_conf_in" in g and pd.notna(r.edge_conf_in) else None]
+               for r in g.itertuples()]
+        tracks.append(dict(id=int(tid), lineage=int(g.iloc[0]["lineage_id"]), parent=parent,
+                           start=str(g.iloc[0].get("start_type", "")), end=str(g.iloc[-1].get("end_type", "")),
+                           color=_track_color(int(tid)), pts=pts))
+    ev = d[d.state.isin(["dividing", "dying"])]
+    events = [[int(r.frame_local), round(float(r.x), 1), round(float(r.y), 1), str(r.state), int(r.track_id)] for r in ev.itertuples()]
+
+    # transition matrices (whole movie) + summary numbers
+    tr = Path(cfg["paths"]["analysis_dir"]) / f"transition_{args.name}"
+    mats = {}
+    for lag in (1, 4, 12):
+        p = tr / f"probs_lag{lag}_all.csv"
+        if p.exists():
+            m = pd.read_csv(p, index_col=0)
+            n = pd.read_csv(tr / f"counts_lag{lag}_all.csv", index_col=0).sum(axis=1) if (tr / f"counts_lag{lag}_all.csv").exists() else None
+            mats[f"lag{lag}"] = dict(rows=list(m.index), cols=list(m.columns), probs=m.round(3).values.tolist(),
+                                     n=[int(x) for x in n.reindex(m.index).fillna(0)] if n is not None else None)
+    summary = json.loads((tr / "summary.json").read_text()) if (tr / "summary.json").exists() else {}
+    meta = dict(tag=tag, name=args.name, source=Path(cfg["paths"]["raw_tif"]).name, start=start, stop=stop, crop=list(crop),
+                size=int(crop[2]), n_frames=stop - start, frame_interval_min=cfg["acquisition"]["frame_interval_min"],
+                pixel_size_um=cfg["acquisition"]["pixel_size_um"], n_tracks=len(tracks), n_cells=len(d),
+                n_lineages=int(d.lineage_id.nunique()), n_divisions=int((d.state == "dividing").sum()),
+                n_deaths=int((d.state == "dying").sum()), states=list(STATE_COLORS),
+                state_colors={s: [int(255 * c) for c in col] for s, col in STATE_COLORS.items()},
+                state_fraction=d.state.value_counts(normalize=True).round(3).to_dict(),
+                speed_thresholds_px_per_frame=summary.get("speed_thresholds_px_per_frame"),
+                dwell_minutes=summary.get("dwell_minutes_uncensored"), event_rates=summary.get("event_rates"),
+                movie_state_fraction=summary.get("state_fraction"), transitions=mats)
+    (out / "meta.json").write_text(json.dumps(meta, indent=1, default=float))
+    (out / "tracks.json").write_text(json.dumps(dict(tracks=tracks, events=events), separators=(",", ":")))
+    # register in the viewer's dataset index
+    idx_p = out.parent / "index.json"
+    idx = json.loads(idx_p.read_text()) if idx_p.exists() else []
+    idx = [e for e in idx if e["tag"] != tag] + [dict(tag=tag, label=args.label or f"{meta['source']}  frames {start}-{stop - 1} "
+                                                       f"({start * meta['frame_interval_min'] / 60:.0f}-{stop * meta['frame_interval_min'] / 60:.0f} h)")]
+    idx_p.write_text(json.dumps(sorted(idx, key=lambda e: e["tag"]), indent=1))
+    size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file()) / 1e6
+    log.info("Wrote %s (%.1f MB): %d frames, %d tracks, %d events", out, size, stop - start, len(tracks), len(events))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["napari", "movie", "export-demo"])
+    ap.add_argument("cmd", choices=["napari", "movie", "export-demo", "export-web"])
+    ap.add_argument("--tag", default=None, help="export-web: dataset id (default <well>_f<start>-<stop>)")
+    ap.add_argument("--label", default=None, help="export-web: label shown in the dataset menu")
     ap.add_argument("--config", default=None)
     ap.add_argument("--out", default=None, help="export-demo: output zip path")
     ap.add_argument("--name", default="hoct")
@@ -242,7 +340,7 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0, help="random seed for --fraction (change it to draw a different subset)")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
-    {"napari": cmd_napari, "movie": cmd_movie, "export-demo": cmd_export_demo}[args.cmd](args, cfg)
+    {"napari": cmd_napari, "movie": cmd_movie, "export-demo": cmd_export_demo, "export-web": cmd_export_web}[args.cmd](args, cfg)
 
 
 if __name__ == "__main__":
