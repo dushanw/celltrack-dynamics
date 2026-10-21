@@ -41,10 +41,11 @@ write_progress() {
         echo
         echo "| well | cluster | job | synced to Mac |"
         echo "|---|---|---|---|"
-        while read -r w state info; do
-            local synced="—"
+        local w st info synced
+        while read -r w st info; do
+            synced="—"
             [ -f "$LOCAL/$w/SYNCED" ] && synced=$(cat "$LOCAL/$w/SYNCED")
-            echo "| $w | $state | $info | $synced |"
+            echo "| $w | $st | $info | $synced |"
         done <<< "$remote_state"
         echo
         echo "Queue:"; echo '```'; ssh -o BatchMode=yes $REMOTE 'squeue -u $USER -o "%.12i %.3t %.10M %R" | grep -E "JOBID|celltrack"' 2>/dev/null; echo '```'
@@ -56,7 +57,7 @@ while true; do
 cd /scratch/$USER/celltrack
 for w in $(cat cluster/wahab/wells.txt) well_A1; do
   d=outputs/$w
-  if   [ -f $d/DONE ];    then echo "$w done $(cut -d' ' -f1-2 $d/DONE | tr ' ' 'T')"
+  if   [ -f $d/DONE ];    then echo "$w done $(date -r $d/DONE '+%FT%H:%M')"
   elif [ -f $d/FAILED ];  then echo "$w FAILED $(cut -c1-60 $d/FAILED | tr ' ' '_')"
   elif [ -f $d/RUNNING ]; then
        n=$(python3 -c "import json,os;p='$d/masks_done.json';print(len(json.load(open(p))) if os.path.exists(p) else 0)" 2>/dev/null)
