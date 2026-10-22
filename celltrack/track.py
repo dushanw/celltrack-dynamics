@@ -140,6 +140,8 @@ def _ilp_chunked(cand: nx.DiGraph, chunk: int, allow_divisions: bool = True) -> 
     from trackastra.tracking.ilp import track_ilp
 
     times = nx.get_node_attributes(cand, "time")
+    if not times:  # no detections in this window (e.g. an empty crop of a sparse well)
+        return nx.DiGraph()
     t_min, t_max = min(times.values()), max(times.values())
     T = t_max - t_min + 1
     if T <= chunk + 4:

@@ -544,13 +544,43 @@ def main(argv=None):
         log.info("time reversal: %s", results["time_reversal"]["bidirectional_fraction"])
     if args.what in ("minigt", "all"):
         wins = _windows(start, stop, n=3, length=20)
-        crops = [(a, 1280, 1280, 512) for a, _ in wins]
+        crops = [c for c in (_pick_crop(det, a, b, cfg["acquisition"]["shape_yx"]) for a, b in wins) if c is not None]
         results["mini_gt"] = mini_gt(cfg, [args.name, *args.compare], det, out, crops)
         log.info("mini-GT: %s", json.dumps(results["mini_gt"], indent=1, default=float)[:2000])
 
     with open(res_path, "w") as fh:
         json.dump(results, fh, indent=2, default=float)
     log.info("Wrote %s", res_path)
+
+
+def _pick_crop(det: pd.DataFrame, a: int, b: int, shape_yx, size: int = 512, min_per_frame: float = 3.0):
+    """Crop (f0, y0, x0, size) for the mini-GT window [a, b). The fixed centre crop is kept
+    when it holds enough cells (so dense wells stay comparable across runs); for sparse
+    wells the densest `size`² region is used instead, and a window without any cells is
+    skipped (returns None)."""
+    d = det[(det.frame >= a) & (det.frame < b)]
+    need = min_per_frame * (b - a)
+    y0 = x0 = 1280
+    inside = d[(d.y >= y0) & (d.y < y0 + size) & (d.x >= x0) & (d.x < x0 + size)]
+    if len(inside) >= need:
+        return (a, y0, x0, size)
+    if len(d) == 0:
+        log.warning("mini-GT: no detections in frames %d-%d, skipping crop", a, b)
+        return None
+    step = size // 2  # coarse search for the densest crop: count cells per half-crop bin
+    H, W = shape_yx
+    iy = (d.y.values // step).astype(int)
+    ix = (d.x.values // step).astype(int)
+    counts = np.zeros((iy.max() + 2, ix.max() + 2), dtype=int)
+    np.add.at(counts, (iy, ix), 1)
+    n_y, n_x = max(1, (H - size) // step + 1), max(1, (W - size) // step + 1)  # candidate starts
+    counts = np.pad(counts, ((0, max(0, n_y + 1 - counts.shape[0])), (0, max(0, n_x + 1 - counts.shape[1]))))
+    full = counts[:n_y, :n_x] + counts[1:n_y + 1, :n_x] + counts[:n_y, 1:n_x + 1] + counts[1:n_y + 1, 1:n_x + 1]
+    i, j = np.unravel_index(int(np.argmax(full)), full.shape)
+    y0, x0 = int(i * step), int(j * step)
+    log.info("mini-GT: centre crop too sparse in frames %d-%d (%d cells), using densest crop at y=%d x=%d (%d cells)",
+             a, b, len(inside), y0, x0, int(full[i, j]))
+    return (a, y0, x0, size)
 
 
 def _windows(start, stop, n, length):
