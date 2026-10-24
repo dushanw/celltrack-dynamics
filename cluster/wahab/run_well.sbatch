@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=180G
-#SBATCH --time=08:00:00
+#SBATCH --time=30:00:00   # dense wells (~1.8 M detections) need ~15 h at 2 solvers per direction
 #SBATCH --output=logs/%x_%A_%a.out
 #
 # One movie per array task on a 4-GPU Wahab node. Wells come from cluster/wahab/wells.txt
