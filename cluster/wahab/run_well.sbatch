@@ -72,12 +72,20 @@ fi
 stage features
 $PY -m celltrack.segment --config "$CFG" features --workers 24 || fail "features"
 
-# 4. HOCT forward (GPUs 0,1) and time-reversed (GPUs 2,3), 6 chunks in flight each
-stage tracking
-$PY -m celltrack.track --config "$CFG" hoct --stop $T --chunk $CHUNK --name hoct --jobs 6 --gpus 0,1 \
+# 4. HOCT forward (GPUs 0,1) and time-reversed (GPUs 2,3), several chunks in flight each.
+#    The ILP (SCIP) memory grows with cell density: 12 concurrent solvers fit in 180 GB up to
+#    ~1.2 M detections (~2000 cells/frame); denser wells (rows G-H: 1.7-1.8 M) ran out of
+#    memory, so the concurrency is scaled by the detection count (override with HOCT_JOBS).
+NDET=$($PY -c "import pyarrow.parquet as pq;print(pq.ParquetFile('$OUT/detections.parquet').metadata.num_rows)")
+if [ -n "${HOCT_JOBS:-}" ]; then JOBS=$HOCT_JOBS
+elif [ "$NDET" -gt 1500000 ]; then JOBS=2
+elif [ "$NDET" -gt 1100000 ]; then JOBS=3
+else JOBS=6; fi
+stage "tracking ($NDET detections, $JOBS chunks in flight per direction)"
+$PY -m celltrack.track --config "$CFG" hoct --stop $T --chunk $CHUNK --name hoct --jobs $JOBS --gpus 0,1 \
     > "logs/track_${WELL}_hoct.log" 2>&1 &
 P_FWD=$!
-$PY -m celltrack.track --config "$CFG" hoct --reverse --stop $T --chunk $CHUNK --name hoct --jobs 6 --gpus 2,3 \
+$PY -m celltrack.track --config "$CFG" hoct --reverse --stop $T --chunk $CHUNK --name hoct --jobs $JOBS --gpus 2,3 \
     > "logs/track_${WELL}_hoct_rev.log" 2>&1 &
 P_REV=$!
 wait $P_FWD || fail "forward HOCT, see logs/track_${WELL}_hoct.log"

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -289,11 +290,24 @@ def cmd_run(args, cfg):
             return set(json.load(open(done_path)))
 
     def write_done(mine: set[int]):
-        # merge with other concurrent workers before writing
-        merged = read_done() | mine
-        tmp = done_path.with_suffix(".tmp")
-        json.dump(sorted(merged), open(tmp, "w"))
-        tmp.replace(done_path)
+        # merge with other concurrent workers before writing; a lock file serialises the
+        # read-merge-rename and the temp name is per process (two workers once raced on a
+        # shared .tmp and one crashed on the rename)
+        import fcntl
+
+        tmp = done_path.with_name(f"masks_done.{os.getpid()}.tmp")
+        for attempt in range(5):
+            try:
+                with open(done_path.with_suffix(".lock"), "w") as lk:
+                    fcntl.flock(lk, fcntl.LOCK_EX)
+                    merged = read_done() | mine
+                    json.dump(sorted(merged), open(tmp, "w"))
+                    tmp.replace(done_path)
+                return
+            except OSError as e:
+                log.warning("masks_done update failed (%s), retrying", e)
+                time.sleep(0.5 * (attempt + 1))
+        log.error("could not update %s; masks are written, rerun will re-record them", done_path)
 
     done = read_done()
     todo = [t for t in range(args.start, min(args.stop, T)) if t not in done]
