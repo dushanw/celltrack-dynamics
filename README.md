@@ -3,7 +3,7 @@
 Label-free cell tracking and state-transition analysis for low-frame-rate time-lapse microscopy.
 
 Developed on `well_A1_stack.tif` of the Jurkat MCAM-well dataset: a 24 h phase-contrast time-lapse
-(576 frames, 2.5 min interval, 3072 × 3072 px, pixel size unknown) in which cells migrate, divide,
+(576 frames, 2.5 min interval, 3072 × 3072 px at 0.5 µm/px, 0.3 NA) in which cells migrate, divide,
 die and cluster. The goal is to track every cell as well as the frame rate allows and to summarise
 the population as a **state-transition matrix** (stationary / slow / fast / in-cluster / dividing /
 dying / left field), with dwell times, event rates and an honest estimate of how reliable the
@@ -199,9 +199,25 @@ container via `crun`, CUDA 12.6 torch for the V100s, model weights); `sbatch clu
 runs the whole pipeline for one movie on a 4-GPU node (segmentation split over the GPUs, forward /
 reversed HOCT and the comparison linkers concurrently). Total ≈ 3.5 h per movie.
 
+**Whole plate.** `sbatch --array=0-46%3 cluster/wahab/run_well.sbatch` processes one well per array
+task (wells listed in `cluster/wahab/wells.txt`; HOCT chunks solved concurrently, with the number of
+solvers scaled to cell density because the ILP's memory grows steeply with cells per chunk). On the
+workstation, `cluster/wahab/sync_results.sh` polls the cluster and pulls each finished well into
+`outputs/wells/<well>/` (~4.5 GB per well, raw zarr excluded), writing `outputs/wells/progress.md`.
+Dense wells (3000 cells/frame) take ~15 h; sparse ones ~3 h.
+
+**Plate-level analysis.** `python -m celltrack.plate --platemap <plate map xlsx>` joins the per-well
+results with the experimental design (condition, seeding density, replicate) and writes
+`outputs/wells/plate/`: `well_summary.csv` (one row per well and 6 h window, µm-calibrated: density,
+speed, MSD/D/α, persistence, state occupancy with *plate-wide* pooled speed thresholds so wells are
+comparable, divisions, morphology, drift/QC columns), `transition_global_long.csv` (per-well matrices at
+lag 2.5/10/30 min with the pooled thresholds), `speed_vs_density.csv`, `frame_series.csv`, 8×6 plate
+heatmaps and per-condition replicate plots. The findings reports written on top of these tables are in
+the same folder (`findings_*.md`, `report.html`).
+
 ## 9. Limitations
 
-* Pixel size unknown: all lengths are in pixels. Set `acquisition.pixel_size_um` in the config and re-run `states`, `transition`, `motility` for µm units.
+* The per-well outputs in `outputs/wells/` were produced before the pixel size (0.5 µm/px) was known, so their tables are in pixels; the plate-level tables (`celltrack.plate`) apply the calibration. Re-run `states`, `transition`, `motility` for µm units in the per-well reports.
 * Division recall inside clusters is limited, and the 500 "in-cluster" divisions are roughly half false; the true count lies between 384 and 884. Death is under-detected (corpses that stay visible are counted as stationary).
 * Frames 476, 499, 510, 511, 541 are slightly defocused; gap closing absorbs most resulting breaks.
 * At 2.5 min, "fast/slow" describe the step-size distribution, not persistent migration modes; a higher frame rate (≤ 1 min) would be needed to resolve persistence and to make dense-cluster links reliable.

@@ -17,7 +17,7 @@ paths:
 
 acquisition:
   frame_interval_min: 2.5             # minutes between frames (user supplied)
-  pixel_size_um: null                 # unknown; fill in to get physical units
+  pixel_size_um: 0.5                  # MCAM, 0.3 NA (~10x), 1.2 um resolution (J. Brake, Oct 2026)
   n_frames: 576
   shape_yx: [3072, 3072]
 

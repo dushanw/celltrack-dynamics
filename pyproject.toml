@@ -26,6 +26,7 @@ dependencies = [
     "imageio>=2.35",
     "imageio-ffmpeg>=0.5",
     "matplotlib>=3.9",
+    "openpyxl>=3.1",
     "pyyaml>=6",
     "tqdm>=4.66",
     "numba>=0.60",
