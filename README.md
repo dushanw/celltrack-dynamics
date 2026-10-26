@@ -15,6 +15,7 @@ Main result per movie: `outputs/analysis/transition_hoct/report.html`.
 celltrack/          the pipeline (one CLI module per stage, see §2)
 demo/               browser viewer (demo/web, live at wadduwagelab.com/demos/celltrack) and napari demo (see §6)
 docs/images/        screenshots used in this README
+docs/plate-analysis/ 48-well plate analysis: report, five findings write-ups, figures, per-well tables and QC tiers (see §8)
 configs/            default.yaml (laptop, Apple MPS) and wahab.yaml (ODU Wahab cluster, CUDA)
 cluster/wahab/      Slurm job script, environment setup and data download for the Wahab cluster
 data/               raw stacks      (git-ignored; see §8)
@@ -212,8 +213,10 @@ results with the experimental design (condition, seeding density, replicate) and
 speed, MSD/D/α, persistence, state occupancy with *plate-wide* pooled speed thresholds so wells are
 comparable, divisions, morphology, drift/QC columns), `transition_global_long.csv` (per-well matrices at
 lag 2.5/10/30 min with the pooled thresholds), `speed_vs_density.csv`, `frame_series.csv`, 8×6 plate
-heatmaps and per-condition replicate plots. The findings reports written on top of these tables are in
-the same folder (`findings_*.md`, `report.html`).
+heatmaps and per-condition replicate plots. The analysis written on top of these tables for the
+2026-10-19 plate (synthesis `report.md`/`report.html`, the five topic write-ups `findings_*.md`, their
+figures, `well_qc_tiers.csv` and the plate tables) is committed in `docs/plate-analysis/` and published at
+**https://wadduwagelab.com/demos/celltrack/plate/**.
 
 ## 9. Limitations
 
