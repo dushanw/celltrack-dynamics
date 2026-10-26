@@ -2,24 +2,27 @@
 
 Label-free cell tracking and state-transition analysis for low-frame-rate time-lapse microscopy.
 
-Developed on `well_A1_stack.tif` of the Jurkat MCAM-well dataset: a 24 h phase-contrast time-lapse
-(576 frames, 2.5 min interval, 3072 × 3072 px at 0.5 µm/px, 0.3 NA) in which cells migrate, divide,
-die and cluster. The goal is to track every cell as well as the frame rate allows and to summarise
-the population as a **state-transition matrix** (stationary / slow / fast / in-cluster / dividing /
-dying / left field), with dwell times, event rates and an honest estimate of how reliable the
-tracking is.
+Developed on `well_A1_stack.tif` of the Jurkat MCAM-well dataset and then run on all 48 wells of the
+plate: 24 h label-free time-lapses (576 frames, 2.5 min interval, 3072 × 3072 px at 0.5 µm/px,
+0.3 NA, 2.36 mm² field per well) in which cells migrate, divide, die and cluster. The goal is to track
+every cell as well as the frame rate allows and to summarise the population as a
+**state-transition matrix** (stationary / slow / fast / in-cluster / dividing / dying / left field),
+with dwell times, event rates and an honest estimate of how reliable the tracking is; at plate level,
+to compare those quantities across substrate coatings, seeding densities and drug treatments.
 
-Main result per movie: `outputs/analysis/transition_hoct/report.html`.
+Main results: per movie `outputs/analysis/transition_hoct/report.html`; for the plate
+[`docs/plate-analysis/report.md`](docs/plate-analysis/report.md) (§6), also at
+https://wadduwagelab.com/demos/celltrack/plate/.
 
 ```
-celltrack/          the pipeline (one CLI module per stage, see §2)
-demo/               browser viewer (demo/web, live at wadduwagelab.com/demos/celltrack) and napari demo (see §6)
-docs/images/        screenshots used in this README
-docs/plate-analysis/ 48-well plate analysis: report, five findings write-ups, figures, per-well tables and QC tiers (see §8)
-configs/            default.yaml (laptop, Apple MPS) and wahab.yaml (ODU Wahab cluster, CUDA)
-cluster/wahab/      Slurm job script, environment setup and data download for the Wahab cluster
-data/               raw stacks      (git-ignored; see §8)
-outputs/            all results     (git-ignored)
+celltrack/           the pipeline (one CLI module per stage, see §2; plate.py aggregates wells, see §6)
+demo/                browser viewer (demo/web, live at wadduwagelab.com/demos/celltrack) and napari demo (see §7)
+docs/images/         screenshots used in this README
+docs/plate-analysis/ 48-well plate analysis: report, five findings write-ups, figures, per-well tables and QC tiers (see §6)
+configs/             default.yaml (laptop, Apple MPS) and wahab.yaml (ODU Wahab cluster, CUDA)
+cluster/wahab/       Slurm job scripts, environment setup, data download and result sync for the Wahab cluster
+data/                raw stacks      (git-ignored; see §9)
+outputs/             all results     (git-ignored; outputs/wells/<well>/ per well, outputs/wells/plate/ plate tables)
 ```
 
 ## 1. The problem
@@ -29,6 +32,9 @@ falls from ~68 px to ~42 px as the population doubles. Frame-to-frame correspond
 genuinely ambiguous, especially inside clusters late in the movie. The pipeline is designed around
 that: link conservatively, re-derive events from morphology rather than trusting the linker, flag
 every link with a confidence, and report matrices for the reliable subset alongside the full one.
+Across the 48 wells the ambiguity is set by step length relative to cell spacing (r = −0.93 with the
+time-reversal agreement), not by density alone: cells arrested on adhesive coatings link almost
+perfectly at 1 300 cells/mm², while 7 µm/min cells under Rapamycin are unreliable at 400 cells/mm².
 
 ## 2. Pipeline (`celltrack/`, Python 3.12)
 
@@ -65,19 +71,94 @@ Everything is resumable; `python -m celltrack.pipeline` re-runs all stages after
 
 Interpretation: early and in sparse regions the tracking is close to perfect; in dense late clusters roughly half the single-frame links are uncertain. The `highconf`, `isolated` and lag-4/12 matrices are the robust ones.
 
-## 5. Headline results
+## 5. Headline results (well A1, Rapamycin 10 nM)
 
-* 589 → 1 220 cells in 24 h (population doubling ≈ 22.8 h). 884 divisions detected (384 high confidence), 14 heuristic deaths, 2 879 left / 2 229 entered the field.
-* Motion states: 13 % stationary, 34 % slow, 53 % fast. Lag-1 matrix is dominated by state switching (fast→fast 0.60, stationary→stationary 0.35); by lag 12 (30 min) all rows converge, i.e. motion state has little memory beyond ~10 min.
+* 589 → 1 220 cells in 24 h. 884 divisions detected (384 high confidence), 14 heuristic deaths, 2 879 left / 2 229 entered the field. The plate analysis (§6) later showed that count growth in the imaged field is dominated by cells arriving in the focal plane and by in-cluster "division" calls, so the apparent doubling time (22.8 h here, 8–12 h in most other wells) is not a proliferation rate.
+* Motion states: 13 % stationary, 34 % slow, 53 % fast with A1's own thresholds (11.4 / 32.2 px·frame⁻¹ = 2.3 / 6.4 µm/min). Lag-1 matrix is dominated by state switching (fast→fast 0.60, stationary→stationary 0.35); by lag 12 (30 min) all rows converge, i.e. motion state has little memory beyond ~10 min.
 * MSD exponent α ≈ 1.0, persistence < 1 frame: at this sampling the cells behave like random walkers. Cells in clusters move slower (D 372 vs 556 px²/frame) and sub-diffusively (α 0.89).
 * Median dwell: stationary 2.5 min, slow 2.5 min, fast 5 min.
+* A1 turned out to be the fastest well on the plate (median step 7.3 µm/min vs 3.3 in the matched controls) and one of the two least reliably tracked (time-reversal agreement 0.64); see §6.
 
 <p align="center">
 <img src="docs/images/heatmap_lag1_all.png" width="49%"> <img src="docs/images/heatmap_lag12_all.png" width="49%">
 </p>
 <p align="center"><i>Transition matrices at lag 1 (2.5 min, left) and lag 12 (30 min, right). Rows: state at t; columns: state reached, or terminal event. By 30 min every row has converged to the same distribution: motion state has little memory.</i></p>
 
-## 6. Use case: judging the tracking by eye
+## 6. Plate-wide results (48 wells)
+
+Full report with figures: [`docs/plate-analysis/report.md`](docs/plate-analysis/report.md)
+([HTML](https://wadduwagelab.com/demos/celltrack/plate/)). The five topic write-ups it reconciles
+(`findings_motility.md`, `findings_transitions.md`, `findings_population.md`, `findings_coculture.md`,
+`findings_qc.md`), their figures, `well_qc_tiers.csv` and the plate tables are in the same folder.
+
+**Design** (`20260818_jurkat_dynamic_MCAMwells.xlsx`). Rows C–H: substrate coating × seeding density,
+columns 1–6 = No coating, Cell-Tak, Collagen, Retronectin, PDL, anti-CD3 (5 µg/ml); rows C/D 5 000,
+E/F 10 000, G/H 20 000 cells per well. Rows A–B: drugs at 10 000 cells, no coating: Rapamycin
+0.01 µM, 2DG 100 µM, TWS119 1 µM, Metformin 150 µM, 2HC 5 mM, tumour coculture (5 000 tumour +
+5 000 CAR⁻ Jurkat); control E1/F1. Two replicate wells per condition; the well is the replication unit
+and effects are condition means vs the matched No-coating wells at the same density.
+
+**Method.** `python -m celltrack.plate` (§9) recomputes every metric in µm from the per-well
+`states_hoct.parquet` with one pooled set of speed thresholds (stationary < 1.07 µm/min < slow <
+3.71 µm/min < fast, from a GMM on 30 000 steps per well) so wells are comparable, per 6 h window and
+for the whole movie. Five independent analysis passes (motility, motion-state transitions,
+population/proliferation, coculture, QC) worked from identical tables; a synthesis pass reconciled
+them and ranked the conclusions by confidence.
+
+**Data quality first.** 25 wells are tier A (all metrics usable), 13 tier B (density, clustering and
+MSD usable; speed and transitions with caution), 10 tier C: A1/B1 (cells too fast for 2.5 min
+sampling), C5/D5/E5/F5 (PDL at 5k/10k: cell aggregates were masked as static objects and
+under-segmented, a detection failure), F6 (focus drift), G3/H3/G6 (dense and fast; G6 also toggles
+focal plane). All controls are tier A.
+
+<p align="center"><img src="docs/plate-analysis/fig_qc_tier_platemap.png" width="90%"></p>
+
+**Conclusions, high confidence.**
+
+* Cell-Tak and Retronectin arrest Jurkat motility at every density: median step 0.30–0.38× control
+  (1.0–1.3 vs 3.2–3.6 µm/min), MSD(10 min) 0.11–0.19×, stationary occupancy 0.42–0.51 vs 0.12–0.13,
+  P(stationary→fast) 0.01–0.03 vs 0.16–0.19. A wholesale slowdown of the whole speed distribution,
+  not a split into arrested and motile subpopulations. PDL at 20k is the strongest arrest on the plate.
+* Collagen has no effect on motility, switching or growth.
+* Rapamycin (10 nM) is the only active drug, with two effects: 2.3× faster and more persistent
+  migration (fast occupancy 0.75 vs 0.44, P(fast→fast) 0.83 vs 0.61, growing over the 24 h) and
+  roughly 2× slower apparent growth (the only wells whose counts plateau). Direction is solid;
+  magnitude ±20 % because of tracking quality. 2DG, TWS119, Metformin and 2HC are null within 24 h.
+* The 4–8× rise in detected cells over 24 h is not proliferation. The tracker balances the gain with
+  ~5 "divisions" per net new cell and the division rate per clustered cell-hour is physically
+  impossible (17× the isolated-cell rate). Image coverage rises in step with counts, so real objects
+  keep arriving in the imaged well centre (the field holds ~5 % of seeded cells at t = 0 and ~25 %
+  at 24 h), and large objects resolve into smaller ones as clusters form. Corrected doubling time
+  ≈ 18–25 h. `count_fold_change`, `apparent_doubling_time_h` and `division_rate_per_1000cells_h`
+  must not be read as biology; compare densities within one time window (6–12 h recommended).
+* The three-state motion chain is not Markov at 2.5 min: cells keep their state for 30–70 min
+  (controls), 90–125 min (stationary on adhesive coatings), ~210 min (stationary in coculture).
+
+<p align="center"><img src="docs/plate-analysis/fig_motility_coating_density.png" width="100%"></p>
+
+**Medium confidence.** anti-CD3 causes no arrest, no activation-specific clustering (its 1.2–1.6×
+excess is shared by Cell-Tak and Collagen) and no proliferation increase within 24 h, only a 12–25 %
+MSD reduction. Seeding density reduces net displacement (D −50 % from 5k to 20k) far more than step
+speed (−11 %), and within every motile well cells with a neighbour at 10–20 µm move ~20 % slower
+than cells with one at 30–50 µm. Speed peaks at 6–12 h in all 30 motile wells. Retronectin disperses
+cells (clustering 0.6–0.8× the density trend) while Cell-Tak confines them (α 0.76–0.79). In the
+tumour coculture a speed-driven mixture labels ~17 % of tracked cell-frames tumour-like; Jurkat-like
+cells are ~30 % slower than in Jurkat-only wells and transiently halve their speed during the short
+(median 2.5 min) contacts with tumour-like cells. Most adherent tumour cells are invisible to the
+pipeline because the temporal-median background division suppresses stationary objects.
+
+**Not usable quantitatively.** Death calls (~1 %/day, replicate-inconsistent), morphology
+differences between conditions (within segmentation noise; segmented areas are 1.5–3× a Jurkat
+cross-section because the mask includes the 0.3 NA halo), and anything from PDL at 5k/10k.
+
+**Open questions for the experimenters** (report §8): whether the field is at the well centre and
+cells were settled at t = 0; whether per-timepoint z-stacks exist to re-derive the focal plane for
+G6, F5, B1, G5, H2, F6; whether aggregation on PDL is expected; confirmation of the Rapamycin wells
+and dose; which tumour line is in A6/B6; the exact frame interval. For the coming 30 s dataset a
+focus-locked acquisition would remove the main confound; for 24 h movies a 1 min interval would keep
+motile 20k wells linkable.
+
+## 7. Use case: judging the tracking by eye
 
 Numbers from §4 tell you *how much* to trust the links; the viewer shows you *where*. A typical
 session on well A1:
@@ -151,7 +232,7 @@ python demo/celltrack_demo.py late --fraction 0.3
 A bundle zip can also be passed directly: `python demo/celltrack_demo.py path/to/celltrack_demo_A1_late.zip`. New bundles for any movie,
 window or crop are produced with `python -m celltrack.view export-demo --name hoct --crop Y X SIZE --start A --stop B`.
 
-## 7. Outputs
+## 8. Outputs
 
 ```
 outputs/
@@ -164,9 +245,15 @@ outputs/
   analysis/motility_hoct/             per_track.parquet, MSD / VACF / speed plots
   analysis/validation/                validation_hoct.json, figures, minigt/ consensus crops
   qc/movies/                          overlay movies (3 crops + full field)
+outputs/wells/
+  <well>/                             the same layout per well (48 wells, ~4.5 GB each), config.yaml, DONE marker
+  plate/                              plate_map.csv, well_summary.csv (48 wells x 5 windows x 63 metrics),
+                                      transition_global_long.csv, speed_vs_density.csv, frame_series.csv,
+                                      plate_thresholds.json, plate_heatmap_*.png, condition_*.png,
+                                      findings_*.md + fig_*.png, well_qc_tiers.csv, report.md / report.html
 ```
 
-## 8. Installation, data and running
+## 9. Installation, data and running
 
 ```bash
 git clone https://github.com/dushanw/celltrack-dynamics && cd celltrack-dynamics
@@ -205,9 +292,15 @@ task (wells listed in `cluster/wahab/wells.txt`; HOCT chunks solved concurrently
 solvers scaled to cell density because the ILP's memory grows steeply with cells per chunk). On the
 workstation, `cluster/wahab/sync_results.sh` polls the cluster and pulls each finished well into
 `outputs/wells/<well>/` (~4.5 GB per well, raw zarr excluded), writing `outputs/wells/progress.md`.
-Dense wells (3000 cells/frame) take ~15 h; sparse ones ~3 h.
+Dense wells (3000 cells/frame) take ~15 h; sparse ones ~3 h. Lessons from the full run: the SCIP ILP
+needs ~20 GB per solver on dense chunks, so the number of concurrent HOCT solvers is scaled to the
+detection count (2 above 1.5 M, 3 above 1.1 M, else 6); the time limit is 30 h; `write_done` uses a
+per-process temp file and a lock because four segmentation workers share the folder; the mini-GT
+validation picks the densest 512² crop when the centre crop has fewer than 3 cells per frame (sparse
+wells such as C5).
 
-**Plate-level analysis.** `python -m celltrack.plate --platemap <plate map xlsx>` joins the per-well
+**Plate-level analysis.** `python -m celltrack.plate --wells outputs/wells --platemap <plate map xlsx>
+[--pixel-size 0.5 --frame-interval 2.5]` joins the per-well
 results with the experimental design (condition, seeding density, replicate) and writes
 `outputs/wells/plate/`: `well_summary.csv` (one row per well and 6 h window, µm-calibrated: density,
 speed, MSD/D/α, persistence, state occupancy with *plate-wide* pooled speed thresholds so wells are
@@ -218,10 +311,13 @@ heatmaps and per-condition replicate plots. The analysis written on top of these
 figures, `well_qc_tiers.csv` and the plate tables) is committed in `docs/plate-analysis/` and published at
 **https://wadduwagelab.com/demos/celltrack/plate/**.
 
-## 9. Limitations
+## 10. Limitations
 
 * The per-well outputs in `outputs/wells/` were produced before the pixel size (0.5 µm/px) was known, so their tables are in pixels; the plate-level tables (`celltrack.plate`) apply the calibration. Re-run `states`, `transition`, `motility` for µm units in the per-well reports.
-* Division recall inside clusters is limited, and the 500 "in-cluster" divisions are roughly half false; the true count lies between 384 and 884. Death is under-detected (corpses that stay visible are counted as stationary).
-* Frames 476, 499, 510, 511, 541 are slightly defocused; gap closing absorbs most resulting breaks.
-* At 2.5 min, "fast/slow" describe the step-size distribution, not persistent migration modes; a higher frame rate (≤ 1 min) would be needed to resolve persistence and to make dense-cluster links reliable.
-* No human annotation was available; all quality numbers are internal-consistency proxies, so treat them as rankings and trends rather than absolute accuracies.
+* **Counts are not proliferation.** Detected cells rise 4–8× in 24 h in every well because cells keep arriving in the imaged well centre and clusters resolve into more objects; the tracker books this as divisions (in-cluster division calls run at 17× the isolated-cell rate). Use the isolated-cell division rate as a relative measure within a density group, compare densities within one time window, and ignore `count_fold_change`, `apparent_doubling_time_h` and the total `division_rate_per_1000cells_h`. Division recall inside clusters is limited in the other direction too; for A1 the true count lies between 384 and 884. Death is under-detected (~1 %/day called, replicate-inconsistent).
+* **Stationary objects are suppressed by design.** The flat-field step divides by the temporal-median background, so anything that never moves (adherent tumour cells in A6/B6, tight aggregates on PDL) disappears or is masked as a "bubble". PDL at 5k/10k lost 70–90 % of its cells this way; the coculture tumour population cannot be quantified without re-processing with an aggregate-aware static mask.
+* **Focus.** A single best plane was kept per time point at acquisition. Plate-wide the images sharpen slowly (median intensity +11 %, median segmented area −32 % over 24 h), and G6, F5, B1, G5, H2, F6 toggle between planes. Segmented areas are 1.5–3× a Jurkat cross-section (halo included at 0.3 NA) and depend on density and time, so morphology is comparable only within a window and density group.
+* **Speed estimators.** Tracked speed is biased low in dense motile wells (lost links of the fastest cells; A1/B1, G1, G3, G6, H1, H3, E3, H6); the tracking-free pair-excess estimate is wrong in adherent or clustered wells (segmentation flicker). HOCT's edge confidence is saturated (≥ 0.996 everywhere); the per-link time-reversal flag is the only usable per-link filter. Residual speeds of ~1 µm/min on adhesive coatings are within 5× of the localisation-noise floor (0.2 µm/min).
+* At 2.5 min, "fast/slow" describe the step-size distribution, not persistent migration modes, and cells faster than ~5 µm/min move more than one cell spacing per frame; a higher frame rate (≤ 1 min) is needed to resolve persistence and to keep dense or fast wells linkable. The pooled three-state chain is measurably non-Markov (memory 30–200 min).
+* Two wells per condition. Effects are reported as condition means with both replicates; nothing below ~20 % should be considered resolved, and the Rapamycin phenotype awaits confirmation of well identity and dose.
+* No human annotation was available; all quality numbers are internal-consistency proxies (time reversal, frame skip, multi-linker consensus), so treat them as rankings and trends rather than absolute accuracies.
