@@ -11,11 +11,27 @@
   <strong>celltrack-dynamics</strong>
   <select id="dataset" title="dataset"></select>
   <span id="title" class="muted"></span>
-  <a class="muted right" href="https://github.com/dushanw/celltrack-dynamics" target="_blank" rel="noopener">code</a>
+  <a class="muted right" href="plate/report.html" target="_blank" rel="noopener">plate report</a>
+  <a class="muted" href="https://github.com/dushanw/celltrack-dynamics" target="_blank" rel="noopener">code</a>
 </header>
 
 <main>
   <aside id="left">
+    <section id="plate-section">
+      <h3>Plate <span class="muted">(click a well)</span></h3>
+      <svg id="plate" viewBox="0 0 262 262" role="img" aria-label="96-well plate map, 48 imaged wells"></svg>
+      <div id="plate-tip" hidden></div>
+      <div class="plate-ctl">
+        <label>colour <select id="plate-metric"></select></label>
+        <label>window <select id="plate-window"></select></label>
+      </div>
+      <div id="plate-scale" class="muted small"></div>
+      <p class="muted small plate-key">
+        Rows C–H: coating × seeding density (C–D 5k, E–F 10k, G–H 20k cells/well); columns 1 No coating, 2 Cell-Tak, 3 Collagen, 4 Retronectin, 5 PDL, 6 anti-CD3.
+        Rows A–B: drug panel at 10k, no coating; columns 1 Rapamycin, 2 2DG, 3 TWS119, 4 Metformin, 5 2HC, 6 tumour co-culture.
+        Ring = tracking QC tier (<span class="tier-a">A</span> reliable, <span class="tier-b">B</span> usable, <span class="tier-c">C</span> motility metrics unreliable).
+      </p>
+    </section>
     <section>
       <h3>Layers</h3>
       <label><input type="checkbox" id="l-image" checked> phase contrast</label>
@@ -41,6 +57,7 @@
     <section>
       <h3>How to read it</h3>
       <ul class="help">
+        <li>Each well shows a 640 px (320 µm) excerpt of frames 144–239 (6–10 h). Sparse wells use the densest region of the field instead of the centre.</li>
         <li>Scroll to zoom, drag to pan, <kbd>R</kbd> resets the view.</li>
         <li><kbd>space</kbd> plays, <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> step one frame (2.5 min).</li>
         <li>A trail that changes colour is an identity switch; a trail that stops is a cell that was lost, merged, left the field or divided.</li>
@@ -66,6 +83,15 @@
   </div>
 
   <aside id="right">
+    <section id="well-section" hidden>
+      <h3>Plate-wide results <span id="well-title" class="muted"></span></h3>
+      <div id="well-info" class="kv"></div>
+      <div id="well-tier" class="small"></div>
+      <table class="metrics" id="well-metrics"></table>
+      <p class="muted small">Whole-well metrics from the 24 h movie (2.36 mm² field), not just this excerpt.
+        6–12 h is the recommended motility window (after settling, before crowding). Control = matched No-coating well at the same density
+        (<span id="well-ctrl"></span>); ratio in the last column. Details in the <a href="plate/report.html" target="_blank" rel="noopener">plate report</a>.</p>
+    </section>
     <section>
       <h3>This excerpt</h3>
       <div id="stats" class="kv"></div>

@@ -201,18 +201,26 @@ python -m celltrack.view napari --name hoct --fraction 0.1 --seed 2
 
 ### Live browser demo (nothing to install)
 
-**https://wadduwagelab.com/demos/celltrack/** — two 96-frame, 768 × 768 px excerpts of well A1
-(0–4 h sparse, 20–24 h dense) in a static HTML/JS viewer: zoom/pan, time scrubbing, trails coloured
-by track id or state, masks coloured by track id, division/death rings, hover for track id / state /
-speed / link confidence, click to highlight a lineage, plus the transition matrix and dwell times.
+**https://wadduwagelab.com/demos/celltrack/** — a static HTML/JS viewer covering the whole plate.
+Click a well on the plate map (or pick it from the menu, or open `?w=G5`) to load that well's tracked
+movie: a 96-frame (6–10 h), 640 × 640 px (320 µm) excerpt per well, 48 wells, with zoom/pan, time
+scrubbing, trails coloured by track id or state, masks coloured by track id, division/death rings,
+hover for track id / state / speed / link confidence and click to highlight a lineage. The plate map is
+coloured by any whole-well metric and time window from §6 (ring colour = QC tier), and the right panel
+shows the selected well's condition, tier, and its metrics for the chosen window and the whole movie
+against the matched No-coating control, next to the excerpt's own transition matrix and dwell times.
+The two original well A1 excerpts (0–4 h sparse, 20–24 h dense, 768 px) are still in the menu.
 
 <p align="center"><img src="docs/images/web_viewer.png" width="90%"></p>
 
-The viewer is `demo/web/` (no build step); its data comes from
-`python -m celltrack.view export-web --name hoct --crop Y X SIZE --start A --stop B [--label "..."]`,
-which writes JPEG frames, RGBA mask overlays and `tracks.json` into `demo/web/data/<tag>/` (~14 MB per
-excerpt) and registers the excerpt in `data/index.json`. To publish, copy `demo/web/` to any static
-host; the live copy lives in the lab-website repository under `demos/celltrack/`.
+The viewer is `demo/web/` (no build step). Per-well excerpts come from
+`python -m celltrack.view export-web --config outputs/wells/well_E1/config.yaml --name hoct --crop 1216 1216 640 --start 144 --stop 240 --quality 72 --min-cells 15 --tag E1 --well E1 --source well_E1 --label "..."`,
+which writes JPEG frames, RGBA mask overlays, `tracks.json` and `meta.json` into `demo/web/data/<tag>/`
+(~5 MB per well at quality 72) and registers the excerpt in `data/index.json`; `--min-cells` moves the
+crop to the densest region of the field for sparse wells (C5, D5, …). `demo/web/data/plate.json` holds
+the per-well metrics, transition matrices and QC tiers (the same table the plate dashboard uses, built
+from `outputs/wells/plate/`). To publish, copy `demo/web/` to any static host; the live copy lives in
+the lab-website repository under `demos/celltrack/` (~300 MB with all 48 wells).
 
 ### napari demo for collaborators (no data, no GPU)
 

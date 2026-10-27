@@ -23,10 +23,20 @@ const rgb = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 
 // ----------------------------------------------------------------------------- data
 async function loadIndex() {
-  const idx = await (await fetch("data/index.json")).json();
-  UI.dataset.innerHTML = idx.map((e) => `<option value="${e.tag}">${e.label}</option>`).join("");
-  const want = new URLSearchParams(location.search).get("d");
+  const [idx, plate] = await Promise.all([
+    fetch("data/index.json").then((r) => r.json()),
+    fetch("data/plate.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+  ]);
+  S.index = idx; S.plate = plate;
+  S.tagByWell = new Map(idx.filter((e) => e.well).map((e) => [e.well, e.tag]));
+  const opt = (e) => `<option value="${e.tag}">${e.label}</option>`;
+  const wells = idx.filter((e) => e.well).sort((a, b) => a.well.localeCompare(b.well, undefined, { numeric: true })), other = idx.filter((e) => !e.well);
+  UI.dataset.innerHTML = (wells.length ? `<optgroup label="Plate wells (6–10 h excerpts)">${wells.map(opt).join("")}</optgroup>` : "") +
+    (other.length ? `<optgroup label="Other excerpts">${other.map(opt).join("")}</optgroup>` : "");
+  const q = new URLSearchParams(location.search), want = q.get("d") || (q.get("w") && S.tagByWell.get(q.get("w").toUpperCase()));
   if (want && idx.some((e) => e.tag === want)) UI.dataset.value = want;
+  else if (S.tagByWell.has("E1")) UI.dataset.value = S.tagByWell.get("E1");   // default: a tier-A control well
+  if (plate) initPlate();
   await loadDataset(UI.dataset.value);
 }
 
@@ -40,10 +50,10 @@ async function loadDataset(tag) {
   S.byFrame = Array.from({ length: meta.n_frames }, () => []);
   for (const k of S.tracks) k.pts.forEach((p, i) => S.byFrame[p[0]].push({ track: k, i }));
   S.frames = new Array(meta.n_frames).fill(null); S.masks = new Array(meta.n_frames).fill(null);
-  history.replaceState(null, "", `?d=${tag}`);
+  history.replaceState(null, "", meta.well ? `?w=${meta.well}` : `?d=${tag}`);
   $("title").textContent = `${meta.source}  ·  frames ${meta.start}–${meta.stop - 1}  ·  crop ${meta.crop[2]} px at (y ${meta.crop[0]}, x ${meta.crop[1]})  ·  ${meta.n_tracks} tracks`;
   UI.time.max = meta.n_frames - 1; S.t = 0; UI.time.value = 0;
-  renderLegend(); renderStats(); renderMatrix(); renderDwell(); renderSelection();
+  renderLegend(); renderStats(); renderMatrix(); renderDwell(); renderSelection(); renderWell(); markCurrentWell();
   resetView();
   // preload frames progressively (first the current one)
   frameImage(0); await awaitImg(S.frames[0]);
@@ -200,6 +210,98 @@ function renderSelection() {
     "frames": `${S.meta.start + f0} – ${S.meta.start + f1}`, "cell-frames": n, "mean step": `${mean.toFixed(1)} px/frame`,
     "divisions": ks.filter((k) => k.end === "divided").length, "ends": ks.map((k) => k.end || "outside excerpt").join(", "),
   });
+  sec.hidden = false;
+}
+
+// ----------------------------------------------------------------------------- plate map + plate-wide results
+const PLATE_ROWS = "ABCDEFGH", PLATE_COLS = [1, 2, 3, 4, 5, 6];
+const WELL_METRICS = ["cells_per_mm2", "hc_median_step_um_min", "msd_10min_um2", "D_um2_per_min", "msd_alpha", "persistence_time_min",
+  "median_straightness", "frac_stationary", "frac_fast", "cluster_fraction", "division_rate_per_1000cells_h", "count_fold_change",
+  "median_area_um2", "median_eccentricity", "bidir_fraction_full"];
+const wellOf = (meta) => meta.well || ((meta.source || "").match(/well_([A-H]\d+)/) || [])[1] || null;
+const plateWell = (w) => S.plate && S.plate.wells.find((x) => x.well === w);
+function controlOf(w) { return w.group === "drug" ? plateWell(w.row === "A" ? "E1" : "F1") : plateWell(`${w.row}1`); }
+function metricVal(w, metric, win) { const m = w.m[metric]; if (!m) return undefined; return m[win] !== undefined ? m[win] : m.all; }
+function fmtVal(v, dec) { return v === undefined || v === null || Number.isNaN(v) ? "–" : (+v).toFixed(dec); }
+function condLabel(w) { return `${w.condition}${w.group === "coating" ? ` · ${w.density / 1000}k` : ""}`; }
+/* 3-stop colour map (dark blue → accent → amber), u in [0,1] */
+function cmap(u) {
+  const st = [[42, 58, 85], [76, 153, 255], [255, 211, 106]]; u = Math.max(0, Math.min(1, u)) * 2;
+  const i = Math.min(1, Math.floor(u)), f = u - i, a = st[i], b = st[i + 1];
+  return `rgb(${a.map((x, k) => Math.round(x + (b[k] - x) * f)).join(",")})`;
+}
+
+function initPlate() {
+  const P = S.plate, pm = $("plate-metric"), pw = $("plate-window");
+  pm.innerHTML = Object.entries(P.metrics).filter(([k]) => WELL_METRICS.includes(k)).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join("");
+  pm.value = "hc_median_step_um_min";
+  pw.innerHTML = P.windows.map((w) => `<option value="${w}">${w === "all" ? "whole movie" : w.replace("h", " h")}</option>`).join("");
+  pw.value = "6-12h";
+  pm.onchange = pw.onchange = () => { drawPlate(); renderWell(); };
+  // static geometry: 6 columns × 8 rows, labels on the top/left
+  const svg = $("plate"), X0 = 24, Y0 = 16, DX = 39, DY = 30, R = 12.5;
+  let h = PLATE_COLS.map((c, j) => `<text x="${X0 + j * DX + DX / 2}" y="11" text-anchor="middle">${c}</text>`).join("");
+  [...PLATE_ROWS].forEach((r, i) => { h += `<text x="10" y="${Y0 + i * DY + DY / 2 + 3.5}" text-anchor="middle">${r}</text>`; });
+  for (const w of P.wells) {
+    const cx = X0 + (w.col - 1) * DX + DX / 2, cy = Y0 + PLATE_ROWS.indexOf(w.row) * DY + DY / 2;
+    h += `<g data-well="${w.well}"><circle class="cur" cx="${cx}" cy="${cy}" r="${R + 3.5}" fill="none" stroke="none" stroke-width="2"/>` +
+      `<circle class="well tier-${w.tier || "x"}" data-well="${w.well}" cx="${cx}" cy="${cy}" r="${R}" fill="#333"/>` +
+      `<text class="lbl" x="${cx}" y="${cy + 3}">${w.well}</text></g>`;
+  }
+  svg.innerHTML = h;
+  svg.onclick = (e) => { const g = e.target.closest("[data-well]"); if (!g) return; const tag = S.tagByWell.get(g.dataset.well); if (tag) { UI.dataset.value = tag; loadDataset(tag); } };
+  const tip = $("plate-tip"), sec = $("plate-section");
+  svg.onmousemove = (e) => {
+    const g = e.target.closest("[data-well]"); if (!g) { tip.hidden = true; return; }
+    const w = plateWell(g.dataset.well), m = P.metrics[pm.value], v = metricVal(w, pm.value, pw.value);
+    tip.innerHTML = `<b>${w.well}</b> · ${condLabel(w)} · tier ${w.tier || "?"}<br><span class="muted">${m[0]}:</span> ${fmtVal(v, m[2])} ${m[1]}` +
+      (S.tagByWell.has(w.well) ? "" : `<br><span class="muted">no excerpt exported</span>`);
+    const r = sec.getBoundingClientRect(); tip.style.left = `${Math.min(e.clientX - r.left + 12, r.width - 170)}px`; tip.style.top = `${e.clientY - r.top + 12}px`; tip.hidden = false;
+  };
+  svg.onmouseleave = () => { tip.hidden = true; };
+  drawPlate();
+}
+function drawPlate() {
+  const P = S.plate; if (!P) return;
+  const metric = $("plate-metric").value, win = $("plate-window").value, m = P.metrics[metric];
+  const vals = P.wells.map((w) => metricVal(w, metric, win)).filter((v) => typeof v === "number" && !Number.isNaN(v));
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  for (const w of P.wells) {
+    const v = metricVal(w, metric, win), el = $("plate").querySelector(`circle.well[data-well="${w.well}"]`);
+    el.setAttribute("fill", typeof v === "number" && !Number.isNaN(v) ? cmap((v - lo) / span) : "#333");
+  }
+  const onlyAll = vals.length && P.wells.every((w) => !w.m[metric] || w.m[metric][win] === undefined);
+  $("plate-scale").innerHTML = `<span>${fmtVal(lo, m[2])}</span><span class="bar"></span><span>${fmtVal(hi, m[2])}</span>` +
+    `<span>${m[1]}${onlyAll && win !== "all" ? " (whole movie)" : ""}</span>`;
+}
+function markCurrentWell() {
+  if (!S.plate) return;
+  const cur = S.meta && wellOf(S.meta);
+  for (const g of $("plate").querySelectorAll("g[data-well]")) g.querySelector(".cur").setAttribute("stroke", g.dataset.well === cur ? "#fff" : "none");
+}
+function renderWell() {
+  const sec = $("well-section"), w = S.plate && S.meta && plateWell(wellOf(S.meta));
+  if (!w) { sec.hidden = true; return; }
+  const P = S.plate, ctrl = controlOf(w), isCtrl = ctrl && ctrl.well === w.well, win = $("plate-window").value;
+  $("well-title").textContent = `· well ${w.well}`;
+  $("well-info").innerHTML = kv({
+    "condition": w.condition, "seeding": `${w.density.toLocaleString()} cells/well`,
+    "group": w.group === "drug" ? "drug panel (no coating)" : "coating × density", "replicate": `${w.replicate} of 2`,
+  });
+  const tierCls = { A: "tier-a", B: "tier-b", C: "tier-c" }[w.tier] || "muted";
+  $("well-tier").innerHTML = `<span class="${tierCls}">QC tier ${w.tier || "?"}</span> <span class="muted">— ${w.tier_reason || ""}</span>`;
+  $("well-ctrl").textContent = ctrl ? `${ctrl.well}, ${condLabel(ctrl)}` : "n/a";
+  const winLbl = win === "all" ? "whole movie" : win.replace("h", " h"), allCol = win !== "all";
+  let h = `<tr><th>metric</th><th>${winLbl}</th>${allCol ? "<th>whole movie</th>" : ""}<th>${isCtrl ? "" : "vs control"}</th></tr>`;
+  for (const k of WELL_METRICS) {
+    const m = P.metrics[k]; if (!m || !w.m[k]) continue;
+    const vw = w.m[k][win], va = w.m[k].all, vc = ctrl ? metricVal(ctrl, k, win) : undefined, v = vw !== undefined ? vw : va;
+    const ratio = !isCtrl && typeof v === "number" && typeof vc === "number" && vc !== 0 ? v / vc : undefined;
+    const rc = ratio === undefined ? "na" : ratio > 1.15 ? "up" : ratio < 0.85 ? "down" : "";
+    h += `<tr><td title="${k}">${m[0]}${m[1] ? ` <span class="muted">(${m[1]})</span>` : ""}</td><td${vw === undefined ? ' class="na"' : ""}>${fmtVal(vw, m[2])}</td>${allCol ? `<td>${fmtVal(va, m[2])}</td>` : ""}` +
+      `<td class="${rc}">${isCtrl ? '<span class="muted">control</span>' : ratio === undefined ? "–" : `${ratio.toFixed(2)}×`}</td></tr>`;
+  }
+  $("well-metrics").innerHTML = h;
   sec.hidden = false;
 }
 

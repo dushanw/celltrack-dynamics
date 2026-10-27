@@ -249,11 +249,27 @@ def cmd_export_web(args, cfg):
     import imageio.v3 as iio
 
     crop = args.crop or (1200, 1200, 768)
+    if args.min_cells is not None:
+        # sparse wells: move the crop to the densest region of the field if the requested one
+        # holds fewer than --min-cells cells per frame on average
+        from .validate import _pick_crop
+
+        det = pd.read_parquet(cfg["paths"]["detections"], columns=["frame", "y", "x"])
+        stop = min(args.stop, cfg["acquisition"]["n_frames"])
+        y0, x0, s = crop
+        sub = det[(det.frame >= args.start) & (det.frame < stop)]
+        n_in = ((sub.y >= y0) & (sub.y < y0 + s) & (sub.x >= x0) & (sub.x < x0 + s)).sum()
+        if n_in < args.min_cells * (stop - args.start):
+            picked = _pick_crop(det, args.start, stop, cfg["acquisition"]["shape_yx"], size=s, min_per_frame=10**9)
+            if picked is not None:
+                crop = (picked[1], picked[2], s)
+                log.info("Crop moved to the densest %d px region at y=%d x=%d (%d cells in the requested crop)", s, crop[0], crop[1], n_in)
     args.crop = crop
     img, lab, start, stop = _load_window(cfg, args)
     img, lab = np.asarray(img), np.asarray(lab)
     d = load_states(cfg, args.name, start, stop, crop, args.fraction, args.seed)
-    tag = args.tag or f"{Path(cfg['paths']['raw_tif']).stem.replace('_stack', '')}_f{start}-{stop}"
+    source = args.source or Path(cfg["paths"]["raw_tif"]).name
+    tag = args.tag or f"{Path(source).stem.replace('_stack', '')}_f{start}-{stop}"
     from .common import ROOT
 
     out = Path(args.out or (ROOT / "demo" / "web" / "data")) / tag
@@ -263,7 +279,7 @@ def cmd_export_web(args, cfg):
     # frames + mask overlays (colour = track id so identities can be followed on the masks too)
     tid_of = {(int(f), int(l)): int(t) for f, l, t in d[["frame", "label", "track_id"]].itertuples(index=False)}
     for i in range(stop - start):
-        iio.imwrite(out / "frames" / f"{i:03d}.jpg", img[i], quality=85)
+        iio.imwrite(out / "frames" / f"{i:03d}.jpg", img[i], quality=args.quality)
         m = lab[i]
         labels = np.unique(m)
         labels = labels[labels > 0]
@@ -301,7 +317,7 @@ def cmd_export_web(args, cfg):
             mats[f"lag{lag}"] = dict(rows=list(m.index), cols=list(m.columns), probs=m.round(3).values.tolist(),
                                      n=[int(x) for x in n.reindex(m.index).fillna(0)] if n is not None else None)
     summary = json.loads((tr / "summary.json").read_text()) if (tr / "summary.json").exists() else {}
-    meta = dict(tag=tag, name=args.name, source=Path(cfg["paths"]["raw_tif"]).name, start=start, stop=stop, crop=list(crop),
+    meta = dict(tag=tag, name=args.name, source=source, well=args.well, start=start, stop=stop, crop=list(crop),
                 size=int(crop[2]), n_frames=stop - start, frame_interval_min=cfg["acquisition"]["frame_interval_min"],
                 pixel_size_um=cfg["acquisition"]["pixel_size_um"], n_tracks=len(tracks), n_cells=len(d),
                 n_lineages=int(d.lineage_id.nunique()), n_divisions=int((d.state == "dividing").sum()),
@@ -316,8 +332,11 @@ def cmd_export_web(args, cfg):
     # register in the viewer's dataset index
     idx_p = out.parent / "index.json"
     idx = json.loads(idx_p.read_text()) if idx_p.exists() else []
-    idx = [e for e in idx if e["tag"] != tag] + [dict(tag=tag, label=args.label or f"{meta['source']}  frames {start}-{stop - 1} "
-                                                       f"({start * meta['frame_interval_min'] / 60:.0f}-{stop * meta['frame_interval_min'] / 60:.0f} h)")]
+    entry = dict(tag=tag, label=args.label or f"{meta['source']}  frames {start}-{stop - 1} "
+                                              f"({start * meta['frame_interval_min'] / 60:.0f}-{stop * meta['frame_interval_min'] / 60:.0f} h)")
+    if args.well:
+        entry["well"] = args.well
+    idx = [e for e in idx if e["tag"] != tag] + [entry]
     idx_p.write_text(json.dumps(sorted(idx, key=lambda e: e["tag"]), indent=1))
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file()) / 1e6
     log.info("Wrote %s (%.1f MB): %d frames, %d tracks, %d events", out, size, stop - start, len(tracks), len(events))
@@ -328,6 +347,11 @@ def main(argv=None):
     ap.add_argument("cmd", choices=["napari", "movie", "export-demo", "export-web"])
     ap.add_argument("--tag", default=None, help="export-web: dataset id (default <well>_f<start>-<stop>)")
     ap.add_argument("--label", default=None, help="export-web: label shown in the dataset menu")
+    ap.add_argument("--well", default=None, help="export-web: well id (e.g. A1) stored in meta.json and the dataset index")
+    ap.add_argument("--source", default=None, help="export-web: movie name shown in the viewer (default: raw TIFF file name)")
+    ap.add_argument("--quality", type=int, default=85, help="export-web: JPEG quality of the frames")
+    ap.add_argument("--min-cells", type=float, default=None,
+                    help="export-web: if the crop holds fewer cells per frame than this, move it to the densest region of the field")
     ap.add_argument("--config", default=None)
     ap.add_argument("--out", default=None, help="export-demo: output zip path")
     ap.add_argument("--name", default="hoct")
