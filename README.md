@@ -12,7 +12,9 @@ to compare those quantities across substrate coatings, seeding densities and dru
 
 Main results: per movie `outputs/analysis/transition_hoct/report.html`; for the plate
 [`docs/plate-analysis/report.md`](docs/plate-analysis/report.md) (§6), also at
-https://wadduwagelab.com/demos/celltrack/plate/.
+https://wadduwagelab.com/demos/celltrack/plate/. To see the tracking itself, open
+**https://wadduwagelab.com/demos/celltrack/**, click any of the 48 wells on the plate map and watch
+its tracked movie next to that well's plate-wide metrics (§7).
 
 ```
 celltrack/           the pipeline (one CLI module per stage, see §2; plate.py aggregates wells, see §6)
@@ -48,7 +50,8 @@ perfectly at 1 300 cells/mm², while 7 µm/min cells under Rapamycin are unrelia
 | Matrices | `transition.py` | For each cell in state *s* at *t*, follow the lineage *L* frames forward (through divisions) and record the state reached or the terminal event. Lags 1 / 4 / 12 frames (2.5 / 10 / 30 min). Variants: all, high-confidence links only, isolated vs in-cluster cells, in-cluster as its own state, four 6 h windows. 95 % bootstrap CIs over lineages. Dwell times, event rates, HTML report. |
 | Motility | `motility.py` | Ensemble MSD (α, D), velocity autocorrelation / persistence, per-track speed, straightness, turning angles — by confidence, cluster membership and time window. |
 | Validate | `validate.py` | See §4. |
-| View | `view.py` | napari viewer (image, masks, coloured trails, event markers; `--fraction` to show a random subset of lineages) and mp4 overlays in `outputs/qc/movies/`. |
+| View | `view.py` | napari viewer (image, masks, coloured trails, event markers; `--fraction` to show a random subset of lineages), mp4 overlays in `outputs/qc/movies/`, and the `export-web` / `export-demo` subcommands that cut a crop of any movie into the browser viewer's data format or a self-contained napari demo bundle (§7). |
+| Plate | `plate.py` | Joins the per-well results of `outputs/wells/<well>/` with the plate map and recomputes every metric in µm with plate-wide pooled speed thresholds, per 6 h window; writes `outputs/wells/plate/` (§6, §9). |
 
 Everything is resumable; `python -m celltrack.pipeline` re-runs all stages after segmentation. Settings live in `configs/default.yaml` (pass another file with `--config`).
 
@@ -90,6 +93,9 @@ Full report with figures: [`docs/plate-analysis/report.md`](docs/plate-analysis/
 ([HTML](https://wadduwagelab.com/demos/celltrack/plate/)). The five topic write-ups it reconciles
 (`findings_motility.md`, `findings_transitions.md`, `findings_population.md`, `findings_coculture.md`,
 `findings_qc.md`), their figures, `well_qc_tiers.csv` and the plate tables are in the same folder.
+Every number below can be checked against the movies: the browser viewer (§7) shows a 6–10 h
+excerpt of each well with its tracks, and the same per-well metrics, QC tier and control ratio next
+to it (e.g. `https://wadduwagelab.com/demos/celltrack/?w=E2` for Cell-Tak at 10k vs `?w=E1`).
 
 **Design** (`20260818_jurkat_dynamic_MCAMwells.xlsx`). Rows C–H: substrate coating × seeding density,
 columns 1–6 = No coating, Cell-Tak, Collagen, Retronectin, PDL, anti-CD3 (5 µg/ml); rows C/D 5 000,
@@ -109,7 +115,8 @@ them and ranked the conclusions by confidence.
 MSD usable; speed and transitions with caution), 10 tier C: A1/B1 (cells too fast for 2.5 min
 sampling), C5/D5/E5/F5 (PDL at 5k/10k: cell aggregates were masked as static objects and
 under-segmented, a detection failure), F6 (focus drift), G3/H3/G6 (dense and fast; G6 also toggles
-focal plane). All controls are tier A.
+focal plane). All controls are tier A. The tiers are drawn as ring colours on the viewer's plate map,
+and the per-well panel there states the reason for each tier.
 
 <p align="center"><img src="docs/plate-analysis/fig_qc_tier_platemap.png" width="90%"></p>
 
@@ -259,6 +266,11 @@ outputs/wells/
                                       transition_global_long.csv, speed_vs_density.csv, frame_series.csv,
                                       plate_thresholds.json, plate_heatmap_*.png, condition_*.png,
                                       findings_*.md + fig_*.png, well_qc_tiers.csv, report.md / report.html
+demo/web/data/                        (git-ignored; built by `view.py export-web`, ~290 MB for the plate)
+  index.json                          [{tag, label, well}] = the viewer's dataset menu
+  plate.json                          per-well metrics x windows, transition matrices, QC tiers, control mapping
+  <tag>/meta.json, tracks.json        excerpt metadata (crop, thresholds, matrices, dwell times) and tracks
+  <tag>/frames/NNN.jpg, masks/NNN.png phase-contrast frames and track-id-coloured mask overlays
 ```
 
 ## 9. Installation, data and running
